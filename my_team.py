@@ -19,7 +19,7 @@ from contest.util import nearest_point
 #################
 
 def create_team(first_index, second_index, is_red,
-                first='CrazyAgentAttacker', second='CrazyAgentDefender', num_training=0):
+                first='CrazyAgent', second='CrazyAgent', num_training=0):
     """
     This function should return a list of two agents that will form the
     team, initialized using firstIndex and secondIndex as their agent
@@ -46,8 +46,8 @@ class ReflexCaptureAgent(CaptureAgent):
     A base class for reflex agents that choose score-maximizing actions
     """
 
-    def _init_(self, index, time_for_computing=.1):
-        super()._init_(index, time_for_computing)
+    def __init__(self, index, time_for_computing=.1):
+        super().__init__(index, time_for_computing)
         self.start = None
 
     def register_initial_state(self, game_state):
@@ -63,7 +63,6 @@ class ReflexCaptureAgent(CaptureAgent):
         # You can profile your evaluation time by uncommenting these lines
         # start = time.time()
         values = [self.evaluate(game_state, a) for a in actions]
-        # print 'eval time for agent %d: %.4f' % (self.index, time.time() - start)
 
         max_value = max(values)
         best_actions = [a for a, v in zip(actions, values) if v == max_value]
@@ -185,15 +184,16 @@ class DefensiveReflexAgent(ReflexCaptureAgent):
 
 
 
-class CrazyAgentAttacker(CaptureAgent):
+class CrazyAgent(CaptureAgent):
     
     def __init__(self, index, time_for_computing=0.1):
         super().__init__(index, time_for_computing)
         self.total_food_eaten = 0
         self.food_eaten = 0
         self.patrol_target = None
-        self.patrol_direction = 1   # 1 = moving up, -1 = moving down
-    
+        self.role = 'attacker' if self.index > 1 else 'defender'
+        self.patrol_direction = -1 
+
     def choose_action(self, game_state):
         if self.red:
             if game_state.get_score() > 0:
@@ -216,7 +216,10 @@ class CrazyAgentAttacker(CaptureAgent):
         if self.red:
                 home_x_range = range(0, game_state.data.layout.width // 2)
         else:
-            home_x_range = range(game_state.data.layout.width // 2, game_state.data.layout.width)
+            if self.role == 'attacker':
+                home_x_range = range(game_state.data.layout.width // 2, game_state.data.layout.width)
+            else:
+                home_x_range = range(game_state.data.layout.width // 2, game_state.data.layout.width)
         home_positions = [(x, y) for x in home_x_range for y in range(game_state.data.layout.height)
                     if not game_state.has_wall(x, y)]
         return home_positions
@@ -264,8 +267,19 @@ class CrazyAgentAttacker(CaptureAgent):
 
         
         path = None
+        if self.red:
+            if game_state.get_score() <= 0:
+                danger_threshold = 1
+            else:
+                danger_threshold = 3
+        else:
+            if game_state.get_score() >= 0:
+                danger_threshold = 1
+            else:
+                danger_threshold = 3
+
         # Goal is home if he carries >= 18 food or an enemy is close
-        if enemies != [] and self.get_maze_distance(my_pos, closest_enemy) <= 3:
+        if enemies != [] and self.get_maze_distance(my_pos, closest_enemy) <= danger_threshold:
             if  game_state.get_agent_state(closest_enemy_idx).is_pacman == True or game_state.get_agent_state(closest_enemy_idx).scared_timer >= 2:
                 goal = closest_enemy
             else:
@@ -279,7 +293,7 @@ class CrazyAgentAttacker(CaptureAgent):
             if path != None and (len(path) == 1 or len(path) == 0):
                 self.food_eaten = 0
         
-        elif self.food_eaten >= 15 or game_state.data.timeleft <= 100:
+        elif self.food_eaten >= 15 if self.role == 'attacker' else self.food_eaten >= 8 or game_state.data.timeleft <= 100:
 
             goal = min(home_positions, key=lambda pos: self.get_maze_distance(my_pos, pos))
             path = self.a_star_attack(game_state, goal)
@@ -297,13 +311,27 @@ class CrazyAgentAttacker(CaptureAgent):
                 food_positions,
                 key=lambda f: self.get_maze_distance(my_pos, f)
             )
+            mid_y = game_state.data.layout.height // 2
+            if self.role == 'attacker':
+                preferred_food = [f for f in sorted_food if f[1] < mid_y]
+            else:
+                preferred_food = [f for f in sorted_food if f[1] >= mid_y]
+            if preferred_food:
+                sorted_food = preferred_food
             i = 0
             goal = sorted_food[i]
             path = self.a_star_attack(game_state, goal)  
-            while path == None and i < len(sorted_food):
-                i += 1
+            if self.food_eaten > 5 and self.get_maze_distance(my_pos, goal) >= self.get_maze_distance(my_pos, min(home_positions, key=lambda pos: self.get_maze_distance(my_pos, pos))):
+                goal = min(home_positions, key=lambda pos: self.get_maze_distance(my_pos, pos))
+                path = self.a_star_attack(game_state, goal)
+                if path != None and (len(path) == 1 or len(path) == 0):
+                    self.food_eaten = 0
+
+            while path == None and len(sorted_food) != 0 and i < len(sorted_food):
                 goal = sorted_food[i]
                 path = self.a_star_attack(game_state, goal) 
+                i += 1
+        
         else:
             goal = min(home_positions, key=lambda pos: self.get_maze_distance(my_pos, pos))
             path = self.a_star_attack(game_state, goal)
@@ -387,10 +415,13 @@ class CrazyAgentAttacker(CaptureAgent):
         ]
 
         # If patrol target not set, start at the lowest border tile
-        if self.patrol_target is None:
+        if self.patrol_target is None and self.role == 'attacker':
+            self.patrol_target = min(border_positions, key=lambda p: p[len(p)-1])  # bottom
+            self.patrol_direction = -1  # start moving upward
+        elif self.patrol_target is None and self.role == 'defender':
             self.patrol_target = min(border_positions, key=lambda p: p[1])  # bottom
             self.patrol_direction = 1  # start moving upward
-
+            
         bottom_border = min(border_positions, key=lambda p: p[1])
         top_border = max(border_positions, key=lambda p: p[1])
 
@@ -421,21 +452,35 @@ class CrazyAgentAttacker(CaptureAgent):
             if not enemy_positions:
                 goal = center_border
             else:
-                # prioritize non-pacman enemies 
-                defender_targets = []
-                im_scared = game_state.get_agent_state(self.index).scared_timer
-                for enemy in enemy_positions:
-                    if (im_scared  == 0 and game_state.get_agent_state(enemy[0]).is_pacman) or game_state.get_agent_state(enemy[0]).scared_timer >= 2:
-                        defender_targets.append(enemy[1])
+                def enemy_on_their_side(enemy_pos):
+                    if self.red:
+                        return enemy_pos[0] > game_state.data.layout.width // 2  
+                    else:
+                        return enemy_pos[0] <= game_state.data.layout.width // 2   
 
-                if defender_targets:
-                    # chase non-pacman enemies on our side
-                    goal = min(defender_targets, key=lambda p: self.get_maze_distance(my_pos, p))
-                    is_pacman = False
+                visible_enemies_on_our_side = [
+                    (i, pos)
+                    for (i, pos) in enemy_positions
+                    if not enemy_on_their_side(pos)
+                ]
+
+                # If no invaders → patrol
+                if not visible_enemies_on_our_side:
+                    goal = center_border
                 else:
-                    # all enemies are pacman → chase closest invader
-                    goal = min(enemy_positions, key=lambda p: self.get_maze_distance(my_pos, p[1]))[1]
-                    is_pacman = True
+                    defender_targets = []
+                    im_scared = game_state.get_agent_state(self.index).scared_timer
+
+                    for enemy in visible_enemies_on_our_side:
+                        if (im_scared == 0 and game_state.get_agent_state(enemy[0]).is_pacman) or game_state.get_agent_state(enemy[0]).scared_timer >= 2:
+                            defender_targets.append(enemy[1])
+
+                    if defender_targets:
+                        goal = min(defender_targets, key=lambda p: self.get_maze_distance(my_pos, p))
+                        is_pacman = False
+                    else:
+                        goal = min(visible_enemies_on_our_side, key=lambda p: self.get_maze_distance(my_pos, p[1]))[1]
+                        is_pacman = True
 
         path = self.a_star_defend(game_state, goal, is_pacman)
 
@@ -471,10 +516,20 @@ class CrazyAgentAttacker(CaptureAgent):
                 successor = state.generate_successor(self.index, action)
                 new_pos = successor.get_agent_state(self.index).get_position()
 
+                # If moving to new_pos would land on an opponent who is present there capture immediately.
+                for opp_index in self.get_opponents(start_state):
+                    try:
+                        opp_state_in_successor = successor.get_agent_state(opp_index)
+                        opp_pos = opp_state_in_successor.get_position()
+                        if opp_pos is not None and opp_pos == new_pos and opp_state_in_successor.scared_timer == 0:
+                            return path + [action]
+                    except Exception:
+                        # Defensive: in case get_agent_state fails for some index
+                        pass
+
                 if new_pos in expanded:
                     continue
 
-                # default: go to goal
                 h = self.get_maze_distance(new_pos, goal)
 
                 our_side = True
@@ -488,7 +543,7 @@ class CrazyAgentAttacker(CaptureAgent):
                         h *= 2
 
                 if is_pacman and our_side:
-                    h *= -1  # running away from pacman enemies
+                    h -= 2  # running away from pacman enemies
 
                 g = len(path) + 1
                 f = g + h
@@ -496,310 +551,10 @@ class CrazyAgentAttacker(CaptureAgent):
 
                 heapq.heappush(frontier, (f, tie_breaker, successor, path + [action]))
 
-        return None
-
-
-
-
-
-
-class CrazyAgentDefender(CaptureAgent):
-    
-    def __init__(self, index, time_for_computing=0.1):
-        super().__init__(index, time_for_computing)
-        self.total_food_eaten = 0
-        self.food_eaten = 0
-        self.patrol_target = None
-        self.patrol_direction = 1   # 1 = moving up, -1 = moving down
-    
-    def choose_action(self, game_state):
-        return self.choose_action_defend(game_state)
-            
-
-
-    # Attacking part
-    def get_home_positions(self, game_state):
-        if self.red:
-                home_x_range = range(0, game_state.data.layout.width // 2)
-        else:
-            home_x_range = range(game_state.data.layout.width // 2, game_state.data.layout.width)
-        home_positions = [(x, y) for x in home_x_range for y in range(game_state.data.layout.height)
-                    if not game_state.has_wall(x, y)]
-        return home_positions
-    
-
-    def choose_action_attack(self, game_state):
-        """
-        Choose the best action using A*
-        """
-
-        home_positions = self.get_home_positions(game_state)
-
-        my_pos = game_state.get_agent_position(self.index)
-        food_positions = self.get_food(game_state).as_list()
-        defending_food_positions = self.get_food_you_are_defending(game_state).as_list()
-        sorted_defending_food = sorted(
-                defending_food_positions,
-                key=lambda f: self.get_maze_distance(my_pos, f)
-            )
-
-
-        # If just got killed, set food eaten to 0
-        if self.get_previous_observation() != None:
-            if self.get_maze_distance(self.get_previous_observation().get_agent_position(self.index), my_pos) > 1:
-                self.food_eaten = 0
-            if len(self.get_food(self.get_previous_observation()).as_list()) - len(food_positions) == 1:
-                self.food_eaten += 1
-                self.total_food_eaten += 1
-
-        enemy_indices = self.get_opponents(game_state)
-
-        # Pair enemies with positions
-        enemies = []
-        for i in enemy_indices:
-            pos = game_state.get_agent_position(i)
-            if pos is not None:
-                enemies.append((i, pos))
-
-        # If there are enemies, find closest
-        if enemies:
-            closest_enemy_idx, closest_enemy = min(
-                enemies,
-                key=lambda item: self.get_maze_distance(my_pos, item[1])
-            )
-
-        
-        path = None
-        # Goal is home if he carries >= 18 food or an enemy is close
-        if enemies != [] and self.get_maze_distance(my_pos, closest_enemy) <= 3:
-            if  game_state.get_agent_state(closest_enemy_idx).is_pacman == True or game_state.get_agent_state(closest_enemy_idx).scared_timer >= 2:
-                goal = closest_enemy
-            else:
-                goal = min(home_positions, key=lambda pos: self.get_maze_distance(my_pos, pos))
-            
-            path = self.a_star_attack(game_state, goal)
-            if path == []:
-                goal = sorted_defending_food[0]
-                path = self.a_star_attack(game_state, goal)
-
-            if path != None and (len(path) == 1 or len(path) == 0):
-                self.food_eaten = 0
-        
-        elif self.food_eaten >= 15 or game_state.data.timeleft <= 100:
-
-            goal = min(home_positions, key=lambda pos: self.get_maze_distance(my_pos, pos))
-            path = self.a_star_attack(game_state, goal)
-
-            if path == []:
-                goal = sorted_defending_food[0]
-                path = self.a_star_attack(game_state, goal)
-
-            if path != None and (len(path) == 1 or len(path) == 0):
-                self.food_eaten = 0
-        
-        # otherwise we hunt for the nearest food
-        elif food_positions:
-            sorted_food = sorted(
-                food_positions,
-                key=lambda f: self.get_maze_distance(my_pos, f)
-            )
-            i = 0
-            goal = sorted_food[i]
-            path = self.a_star_attack(game_state, goal)  
-            while path == None and i < len(sorted_food):
-                i += 1
-                goal = sorted_food[i]
-                path = self.a_star_attack(game_state, goal) 
-        else:
-            goal = min(home_positions, key=lambda pos: self.get_maze_distance(my_pos, pos))
-            path = self.a_star_attack(game_state, goal)
-            if path != None and (len(path) == 1 or len(path) == 0):
-                self.food_eaten = 0
-
-        if not path:
-            return 'Stop'
-
-        return path[0]
-
-    def a_star_attack(self, start_state, goal):
-        import heapq
-        tie_breaker = 0
-        frontier = []
-        heapq.heappush(frontier, (0.0, tie_breaker, start_state, []))
-        expanded = []
-
-        while frontier:
-            cost, _, state, path = heapq.heappop(frontier)
-            pos = state.get_agent_state(self.index).get_position()
-
-            if pos == goal:
-                if cost >= 1000:
-                    return None
-                else:
-                    return path
-
-            if pos in expanded:
-                continue
-
-            expanded.append(pos)
-
-            for action in state.get_legal_actions(self.index):
-                successor = state.generate_successor(self.index, action)
-                successor_state = successor.get_agent_state(self.index)
-                new_pos = successor_state.get_position()
-
-                if new_pos in expanded:
-                    continue
-                
-                # closest ghost
-                
-
-                g = len(path) + 1
-                h = self.get_maze_distance(new_pos, goal)
-                f = float(g) + h
-                tie_breaker += 1
-                heapq.heappush(frontier, (f, tie_breaker, successor, path + [action]))
-
-        return None   
-    
-    # Defensive Part
-    def choose_action_defend(self, game_state):
-        """
-        Choose the best action using A*
-        """
-
-        my_pos = game_state.get_agent_position(self.index)
-        enemy_indices = self.get_opponents(game_state)
-        enemy_positions = [
-            (i, game_state.get_agent_position(i))
-            for i in enemy_indices
-            if game_state.get_agent_position(i) is not None
-        ]
-
-        # center border once
-        height = game_state.data.layout.height
-        mid_x = game_state.data.layout.width // 2
-        my_pos = game_state.get_agent_state(self.index).get_position()
-
-        if self.red:
-            border_x = mid_x  - 2
-        else:
-            border_x = mid_x
-
-        border_positions = [
-            (border_x, y)
-            for y in range(3, height- 3)
-            if not game_state.has_wall(border_x, y)
-        ]
-
-        # If patrol target not set, start at the lowest border tile
-        if self.patrol_target is None:
-            self.patrol_target = min(border_positions, key=lambda p: p[1])  # bottom
-            self.patrol_direction = 1  # start moving upward
-
-        bottom_border = min(border_positions, key=lambda p: p[1])
-        top_border = max(border_positions, key=lambda p: p[1])
-
-        if my_pos == self.patrol_target:
-            if self.patrol_direction == 1:
-                self.patrol_target = top_border
-                self.patrol_direction = -1
-            else:
-                self.patrol_target = bottom_border
-                self.patrol_direction = 1
-
-        center_border = self.patrol_target
-
-        home_positions = self.get_home_positions(game_state)
-        flag = False
-        is_pacman = False
-        if self.red:
-            if my_pos[0] > border_x:
-                goal = min(home_positions, key=lambda pos: self.get_maze_distance(my_pos, pos))
-                flag = True
-        else:
-            if my_pos[0] < border_x:
-                goal = min(home_positions, key=lambda pos: self.get_maze_distance(my_pos, pos))
-                flag = True
-
-        if not flag:
-            # If no visible enemies - defend center 
-            if not enemy_positions:
-                goal = center_border
-            else:
-                # prioritize non-pacman enemies 
-                defender_targets = []
-                im_scared = game_state.get_agent_state(self.index).scared_timer
-                for enemy in enemy_positions:
-                    if (im_scared == 0 and game_state.get_agent_state(enemy[0]).is_pacman) or game_state.get_agent_state(enemy[0]).scared_timer >= 2:
-                        defender_targets.append(enemy[1])
-
-                if defender_targets:
-                    # chase non-pacman enemies on our side
-                    goal = min(defender_targets, key=lambda p: self.get_maze_distance(my_pos, p))
-                    is_pacman = False
-                else:
-                    # all enemies are pacman → chase closest invader
-                    goal = min(enemy_positions, key=lambda p: self.get_maze_distance(my_pos, p[1]))[1]
-                    is_pacman = True
-
-        path = self.a_star_defend(game_state, goal, is_pacman)
-
-        if not path:
-            return random.choice(game_state.get_legal_actions(self.index))
-
-        return path[0]
-
-
-
-    def a_star_defend(self, start_state, goal, is_pacman):
-        import heapq
-
-        frontier = []
-        heapq.heappush(frontier, (0, 0, start_state, []))
-        expanded = set()
-        tie_breaker = 0
-
-
-        while frontier:
-            cost, _, state, path = heapq.heappop(frontier)
-            pos = state.get_agent_state(self.index).get_position()
-
-            if pos == goal:
-                return path
-
-            if pos in expanded:
-                continue
-            
-            expanded.add(pos)
-
-            for action in state.get_legal_actions(self.index):
-                successor = state.generate_successor(self.index, action)
-                new_pos = successor.get_agent_state(self.index).get_position()
-
-                if new_pos in expanded:
-                    continue
-
-                # default: go to goal
-                h = self.get_maze_distance(new_pos, goal)
-
-                our_side = True
-                if self.red:
-                    if new_pos[0] > start_state.data.layout.width // 2 - 2:
-                        our_side = False
-                        h *= 2
-                else:
-                    if new_pos[0] < start_state.data.layout.width // 2:
-                        our_side = False
-                        h *= 2
-
-                if is_pacman and our_side:
-                    h *= -1  # running away from pacman enemies
-
-                g = len(path) + 1
-                f = g + h
-                tie_breaker += 1
-
-                heapq.heappush(frontier, (f, tie_breaker, successor, path + [action]))
 
         return None
+
+
+
+
+
